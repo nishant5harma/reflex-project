@@ -82,6 +82,70 @@ router.get('/users/:userId/scores', verifyToken, requireRole('admin'), async (re
   }
 });
 
+router.delete('/users/:userId/scores/:scoreId', verifyToken, requireRole('admin'), async (req, res) => {
+  let connection;
+  try {
+    const userId = Number(req.params.userId);
+    const scoreId = Number(req.params.scoreId);
+    if (!Number.isInteger(userId) || userId <= 0) {
+      return res.status(400).json({ message: 'Invalid user id' });
+    }
+    if (!Number.isInteger(scoreId) || scoreId <= 0) {
+      return res.status(400).json({ message: 'Invalid score id' });
+    }
+
+    connection = await db.getConnection();
+    await connection.beginTransaction();
+
+    const [[scoreRow]] = await connection.query(
+      `SELECT id, user_id, score
+       FROM game_scores
+       WHERE id = ? AND user_id = ?`,
+      [scoreId, userId]
+    );
+    if (!scoreRow) {
+      await connection.rollback();
+      return res.status(404).json({ message: 'Score not found' });
+    }
+
+    const [sessionRows] = await connection.query(
+      `SELECT id FROM game_sessions WHERE user_id = ? AND final_score = ?`,
+      [userId, scoreRow.score]
+    );
+
+    const [deleteScore] = await connection.query(
+      `DELETE FROM game_scores WHERE id = ?`,
+      [scoreId]
+    );
+    if (deleteScore.affectedRows === 0) {
+      await connection.rollback();
+      return res.status(409).json({ message: 'Unable to delete score' });
+    }
+
+    const sessionIds = sessionRows.map((row) => row.id);
+    if (sessionIds.length > 0) {
+      await connection.query(`DELETE FROM game_sessions WHERE id IN (?)`, [sessionIds]);
+    }
+
+    await connection.commit();
+    return res.json({
+      message: 'Score deleted, related sessions removed',
+      deletedScoreId: scoreId,
+      relatedSessionCount: sessionIds.length,
+      relatedSessionIds: sessionIds,
+    });
+  } catch (error) {
+    if (connection) {
+      await connection.rollback();
+    }
+    return res.status(500).json({ message: 'Failed to delete score', error: error.message });
+  } finally {
+    if (connection) {
+      connection.release();
+    }
+  }
+});
+
 router.get('/users/:userId/game-sessions', verifyToken, requireRole('admin'), async (req, res) => {
   try {
     const userId = Number(req.params.userId);

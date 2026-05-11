@@ -5,6 +5,7 @@ const {
   listCompletedSessionsForUser,
   getSessionTelemetryBundle,
 } = require('../services/sessionTelemetry');
+const { buildSessionExcelBuffer } = require('../services/sessionExcelExport');
 
 const router = express.Router();
 
@@ -85,7 +86,8 @@ router.get('/game-sessions/:sessionId', verifyToken, async (req, res) => {
 router.post('/game-sessions', verifyToken, async (req, res) => {
   try {
     const [result] = await db.query(
-      `INSERT INTO game_sessions (user_id, status) VALUES (?, 'active')`,
+      `INSERT INTO game_sessions (user_id, session_type, status)
+       VALUES (?, 'three_set_reflex', 'active')`,
       [req.user.id]
     );
 
@@ -129,6 +131,11 @@ router.post('/game-sessions/:sessionId/complete', verifyToken, async (req, res) 
       if (
         !sample ||
         sample.secondIndex !== expectedSecond ||
+        !Number.isInteger(sample.setNumber) ||
+        sample.setNumber < 1 ||
+        sample.setNumber > 3 ||
+        typeof sample.setLabel !== 'string' ||
+        !['pointer', 'keyboard'].includes(sample.controlMode) ||
         typeof sample.paddlePosition !== 'number' ||
         typeof sample.paddleDelta !== 'number' ||
         typeof sample.paddleSpeedPerSecond !== 'number' ||
@@ -181,6 +188,15 @@ router.post('/game-sessions/:sessionId/complete', verifyToken, async (req, res) 
         ) {
           return res.status(400).json({ message: `Invalid eye frame at index ${index}` });
         }
+        if (!Number.isInteger(frame.setNumber) || frame.setNumber < 1 || frame.setNumber > 3) {
+          return res.status(400).json({ message: `Invalid set number in eye frame ${index}` });
+        }
+        if (typeof frame.setLabel !== 'string') {
+          return res.status(400).json({ message: `Invalid set label in eye frame ${index}` });
+        }
+        if (!['pointer', 'keyboard'].includes(frame.controlMode)) {
+          return res.status(400).json({ message: `Invalid control mode in eye frame ${index}` });
+        }
 
         if (
           !isNullableNumber(frame.eyeOffsetX) ||
@@ -198,6 +214,9 @@ router.post('/game-sessions/:sessionId/complete', verifyToken, async (req, res) 
         normalizedEyeFrames.push([
           rawSessionId,
           Math.round(frame.offsetMs),
+          Number.isInteger(frame.setNumber) ? frame.setNumber : 1,
+          typeof frame.setLabel === 'string' ? frame.setLabel.slice(0, 80) : 'Dominant hand',
+          frame.controlMode === 'keyboard' ? 'keyboard' : 'pointer',
           frame.eyeOffsetX === undefined || frame.eyeOffsetX === null ? null : frame.eyeOffsetX,
           frame.eyeOffsetY === undefined || frame.eyeOffsetY === null ? null : frame.eyeOffsetY,
           frame.eyeConfidence === undefined || frame.eyeConfidence === null ? null : frame.eyeConfidence,
@@ -250,6 +269,9 @@ router.post('/game-sessions/:sessionId/complete', verifyToken, async (req, res) 
         const bulkRows = samples.map((sample) => [
           rawSessionId,
           sample.secondIndex,
+          sample.setNumber,
+          sample.setLabel.slice(0, 80),
+          sample.controlMode,
           Number(sample.paddlePosition.toFixed(4)),
           Number(sample.paddleDelta.toFixed(4)),
           Number(sample.paddleSpeedPerSecond.toFixed(4)),
@@ -265,6 +287,9 @@ router.post('/game-sessions/:sessionId/complete', verifyToken, async (req, res) 
             (
               session_id,
               second_index,
+              set_number,
+              set_label,
+              control_mode,
               paddle_position,
               paddle_delta,
               paddle_speed_per_second,
@@ -282,7 +307,17 @@ router.post('/game-sessions/:sessionId/complete', verifyToken, async (req, res) 
       if (normalizedEyeFrames.length > 0) {
         await connection.query(
           `INSERT INTO game_session_eye_frames
-            (session_id, offset_ms, eye_offset_x, eye_offset_y, eye_confidence, blink_detected)
+            (
+              session_id,
+              offset_ms,
+              set_number,
+              set_label,
+              control_mode,
+              eye_offset_x,
+              eye_offset_y,
+              eye_confidence,
+              blink_detected
+            )
            VALUES ?`,
           [normalizedEyeFrames]
         );
@@ -308,6 +343,39 @@ router.post('/game-sessions/:sessionId/complete', verifyToken, async (req, res) 
     }
   } catch (error) {
     return res.status(500).json({ message: 'Failed to finalize session telemetry', error: error.message });
+  }
+});
+
+router.get('/game-sessions/:sessionId/export', verifyToken, async (req, res) => {
+  try {
+    const sessionId = Number(req.params.sessionId);
+    if (!Number.isInteger(sessionId) || sessionId <= 0) {
+      return res.status(400).json({ message: 'Invalid session id' });
+    }
+
+    const [[session]] = await db.query(
+      `SELECT id FROM game_sessions WHERE id = ? AND user_id = ?`,
+      [sessionId, req.user.id]
+    );
+    if (!session) {
+      return res.status(404).json({ message: 'Session not found' });
+    }
+
+    const buffer = await buildSessionExcelBuffer(sessionId);
+    if (!buffer) {
+      return res.status(404).json({ message: 'Session not found' });
+    }
+
+    const safeName = `session_${sessionId}_telemetry_export.xlsx`;
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    );
+    res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`);
+    res.setHeader('Content-Length', String(buffer.length));
+    return res.send(buffer);
+  } catch (error) {
+    return res.status(500).json({ message: 'Failed to build Excel export', error: error.message });
   }
 });
 

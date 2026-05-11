@@ -22,7 +22,7 @@ function openDb() {
 /**
  * Append many eye readings for one session (single transaction).
  * @param {string} sessionKey — server session id as string, or `local-<uuid>` when offline
- * @param {{ offsetMs: number, eyeOffsetX: number|null, eyeOffsetY: number|null, eyeConfidence: number|null, blinkDetected?: boolean }[]} rows
+ * @param {{ offsetMs: number, setNumber: number, setLabel: string, controlMode: 'pointer'|'keyboard', eyeOffsetX: number|null, eyeOffsetY: number|null, eyeConfidence: number|null, blinkDetected?: boolean }[]} rows
  */
 export async function bulkAppendEyeFrames(sessionKey, rows) {
   if (!sessionKey || !rows?.length) return
@@ -35,6 +35,9 @@ export async function bulkAppendEyeFrames(sessionKey, rows) {
       store.add({
         sessionKey,
         offsetMs: row.offsetMs,
+        setNumber: row.setNumber,
+        setLabel: row.setLabel,
+        controlMode: row.controlMode,
         eyeOffsetX: row.eyeOffsetX,
         eyeOffsetY: row.eyeOffsetY,
         eyeConfidence: row.eyeConfidence,
@@ -62,6 +65,9 @@ export async function getEyeFramesForSession(sessionKey) {
       resolve(
         rows.map((row) => ({
           offsetMs: row.offsetMs,
+          setNumber: row.setNumber,
+          setLabel: row.setLabel,
+          controlMode: row.controlMode,
           eyeOffsetX: row.eyeOffsetX,
           eyeOffsetY: row.eyeOffsetY,
           eyeConfidence: row.eyeConfidence,

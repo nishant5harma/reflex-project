@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS game_scores (
 CREATE TABLE IF NOT EXISTS game_sessions (
   id INT AUTO_INCREMENT PRIMARY KEY,
   user_id INT NOT NULL,
+  session_type VARCHAR(40) NOT NULL DEFAULT 'three_set_reflex',
   started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   ended_at TIMESTAMP NULL,
   duration_seconds INT NOT NULL DEFAULT 0,
@@ -42,6 +43,9 @@ CREATE TABLE IF NOT EXISTS game_session_samples (
   id INT AUTO_INCREMENT PRIMARY KEY,
   session_id INT NOT NULL,
   second_index INT NOT NULL,
+  set_number TINYINT NOT NULL DEFAULT 1,
+  set_label VARCHAR(80) NOT NULL DEFAULT 'Dominant hand',
+  control_mode ENUM('pointer', 'keyboard') NOT NULL DEFAULT 'pointer',
   paddle_position DECIMAL(10, 4) NOT NULL,
   paddle_delta DECIMAL(10, 4) NOT NULL DEFAULT 0,
   paddle_speed_per_second DECIMAL(10, 4) NOT NULL DEFAULT 0,
@@ -66,6 +70,9 @@ CREATE TABLE IF NOT EXISTS game_session_eye_frames (
   id BIGINT AUTO_INCREMENT PRIMARY KEY,
   session_id INT NOT NULL,
   offset_ms INT UNSIGNED NOT NULL,
+  set_number TINYINT NOT NULL DEFAULT 1,
+  set_label VARCHAR(80) NOT NULL DEFAULT 'Dominant hand',
+  control_mode ENUM('pointer', 'keyboard') NOT NULL DEFAULT 'pointer',
   eye_offset_x DECIMAL(10, 6) NULL,
   eye_offset_y DECIMAL(10, 6) NULL,
   eye_confidence DECIMAL(6, 4) NULL,
@@ -75,3 +82,32 @@ CREATE TABLE IF NOT EXISTS game_session_eye_frames (
   INDEX idx_eye_session (session_id),
   INDEX idx_eye_session_offset (session_id, offset_ms)
 );
+
+
+ALTER TABLE game_sessions
+  ADD COLUMN IF NOT EXISTS session_type VARCHAR(40) NOT NULL DEFAULT 'three_set_reflex'
+  AFTER user_id;
+
+ALTER TABLE game_session_samples
+  ADD COLUMN IF NOT EXISTS set_number TINYINT NOT NULL DEFAULT 1
+  AFTER second_index;
+
+ALTER TABLE game_session_samples
+  ADD COLUMN IF NOT EXISTS set_label VARCHAR(80) NOT NULL DEFAULT 'Dominant hand'
+  AFTER set_number;
+
+ALTER TABLE game_session_samples
+  ADD COLUMN IF NOT EXISTS control_mode ENUM('pointer', 'keyboard') NOT NULL DEFAULT 'pointer'
+  AFTER set_label;
+
+ALTER TABLE game_session_eye_frames
+  ADD COLUMN IF NOT EXISTS set_number TINYINT NOT NULL DEFAULT 1
+  AFTER offset_ms;
+
+ALTER TABLE game_session_eye_frames
+  ADD COLUMN IF NOT EXISTS set_label VARCHAR(80) NOT NULL DEFAULT 'Dominant hand'
+  AFTER set_number;
+
+ALTER TABLE game_session_eye_frames
+  ADD COLUMN IF NOT EXISTS control_mode ENUM('pointer', 'keyboard') NOT NULL DEFAULT 'pointer'
+  AFTER set_label;

@@ -31,6 +31,9 @@ async function fetchSessionExportData(sessionId) {
 
   const [samples] = await db.query(
     `SELECT second_index,
+            set_number,
+            set_label,
+            control_mode,
             paddle_position,
             paddle_delta,
             paddle_speed_per_second,
@@ -48,6 +51,9 @@ async function fetchSessionExportData(sessionId) {
   const [eyeFrames] = await db.query(
     `SELECT id,
             offset_ms,
+            set_number,
+            set_label,
+            control_mode,
             eye_offset_x,
             eye_offset_y,
             eye_confidence,
@@ -182,15 +188,15 @@ function addUnitsSheet(workbook) {
     ],
     [
       'Eye movement (1 Hz row)',
-      'eye_movement_normalized_per_s = distance between consecutive per-second gaze points in normalized XY (unitless), not inches.',
+      'eye_movement_normalized_per_s (eyeball movement amount) = distance between consecutive per-second gaze points in normalized XY (unitless), not inches.',
     ],
     [
       'Eye path (high-rate row)',
-      'Sum of √(Δx²+Δy²) between consecutive frames inside that second — finer eyeball trace from webcam buffer.',
+      'eye_path_norm_from_high_rate_frames (fine eyeball path) = Sum of √(Δx²+Δy²) between consecutive frames inside that second.',
     ],
     [
       'Blinks (1 Hz)',
-      'blink_detected: 1 if any blink counted in that gameplay second; cumulative_blinks running sum.',
+      'blink_detected (blink happened): 1 if any blink counted in that gameplay second; cumulative_blinks running sum.',
     ],
     [
       'Blinks (high-rate, per minute)',
@@ -199,7 +205,11 @@ function addUnitsSheet(workbook) {
     ['Inches / cm', 'Not stored. Gaze is normalized; paddle is pixels.'],
     [
       'Sheets',
-      '01_Session | 02_Per_SECOND_full | 03_Per_MINUTE_summary | 04_Eye_per_SECOND_from_frames | 05_Eye_frames_raw',
+      '01_Session_overview | 02_Set_summary | 02_Per_SECOND_full | 03_Per_MINUTE_summary | 04_Eye_per_SECOND_HR | 05_Eye_frames_raw',
+    ],
+    [
+      'Why data can be less',
+      'If a set ends early due to OUT / game over, that set will have fewer sample_seconds than expected_seconds. See 02_Set_summary.',
     ],
   ];
 
@@ -262,46 +272,136 @@ function addSessionOverviewSheet(workbook, session, samples, eyeFrames, aggregat
   sheetStyleHeaderRow(sheet);
 }
 
+function addSetSummarySheet(workbook, samples, eyeFrames) {
+  const expectedSecondsBySet = { 1: 30, 2: 30, 3: 60 };
+  const sheet = workbook.addWorksheet('02_Set_summary', {
+    views: [{ state: 'frozen', xSplit: 0, ySplit: 1 }],
+  });
+  sheet.columns = [
+    { header: 'set_number (set no)', key: 'set_number', width: 16 },
+    { header: 'set_label (instruction group)', key: 'set_label', width: 30 },
+    { header: 'control_mode (input type)', key: 'control_mode', width: 20 },
+    { header: 'expected_seconds (s)', key: 'expected_seconds', width: 20 },
+    { header: 'sample_seconds (s)', key: 'sample_seconds', width: 20 },
+    { header: 'second_index_range', key: 'second_range', width: 18 },
+    { header: 'eye_frame_count', key: 'eye_frame_count', width: 16 },
+    { header: 'blink_seconds', key: 'blink_seconds', width: 14 },
+    { header: 'total_paddle_distance_px', key: 'distance', width: 22 },
+    { header: 'avg_paddle_speed_px_per_s', key: 'avg_speed', width: 22 },
+  ];
+
+  const sets = new Map();
+  for (let i = 0; i < samples.length; i += 1) {
+    const s = samples[i];
+    const setNo = Number(s.set_number || 1);
+    if (!sets.has(setNo)) {
+      sets.set(setNo, {
+        setLabel: s.set_label || '',
+        controlMode: s.control_mode || 'pointer',
+        sampleSeconds: 0,
+        minSecond: null,
+        maxSecond: null,
+        blinkSeconds: 0,
+        distance: 0,
+        speedSum: 0,
+      });
+    }
+    const row = sets.get(setNo);
+    row.sampleSeconds += 1;
+    const secondIndex = Number(s.second_index || 0);
+    if (Number.isFinite(secondIndex) && secondIndex > 0) {
+      row.minSecond = row.minSecond == null ? secondIndex : Math.min(row.minSecond, secondIndex);
+      row.maxSecond = row.maxSecond == null ? secondIndex : Math.max(row.maxSecond, secondIndex);
+    }
+    if (s.blink_detected) row.blinkSeconds += 1;
+    row.distance += Math.abs(Number(s.paddle_delta) || 0);
+    row.speedSum += Number(s.paddle_speed_per_second) || 0;
+  }
+
+  for (let i = 0; i < eyeFrames.length; i += 1) {
+    const f = eyeFrames[i];
+    const setNo = Number(f.set_number || 1);
+    if (!sets.has(setNo)) {
+      sets.set(setNo, {
+        setLabel: f.set_label || '',
+        controlMode: f.control_mode || 'pointer',
+        sampleSeconds: 0,
+        eyeFrameCount: 0,
+        blinkSeconds: 0,
+        distance: 0,
+        speedSum: 0,
+      });
+    }
+    const row = sets.get(setNo);
+    row.eyeFrameCount = (row.eyeFrameCount || 0) + 1;
+  }
+
+  const ordered = Array.from(sets.keys()).sort((a, b) => a - b);
+  for (let i = 0; i < ordered.length; i += 1) {
+    const key = ordered[i];
+    const row = sets.get(key);
+    const avgSpeed = row.sampleSeconds ? row.speedSum / row.sampleSeconds : 0;
+    sheet.addRow({
+      set_number: key,
+      set_label: row.setLabel,
+      control_mode: row.controlMode,
+      expected_seconds: expectedSecondsBySet[key] || 0,
+      sample_seconds: row.sampleSeconds,
+      second_range:
+        row.minSecond != null && row.maxSecond != null ? `${row.minSecond}-${row.maxSecond}` : '',
+      eye_frame_count: row.eyeFrameCount || 0,
+      blink_seconds: row.blinkSeconds,
+      distance: Number(row.distance.toFixed(4)),
+      avg_speed: Number(avgSpeed.toFixed(4)),
+    });
+  }
+
+  sheetStyleHeaderRow(sheet);
+}
+
 function addPerSecondFullSheet(workbook, samples, framesBySecond) {
   const sheet = workbook.addWorksheet('02_Per_SECOND_full', {
     views: [{ state: 'frozen', xSplit: 0, ySplit: 1 }],
   });
   sheet.columns = [
-    { header: 'second_index', key: 'second_index', width: 12 },
-    { header: 'time_mm_ss_label', key: 'time_mm_ss', width: 14 },
+    { header: 'second_index (timeline second)', key: 'second_index', width: 22 },
+    { header: 'set_number (set no)', key: 'set_number', width: 16 },
+    { header: 'set_label (instruction group)', key: 'set_label', width: 30 },
+    { header: 'control_mode (input type)', key: 'control_mode', width: 20 },
+    { header: 'time_mm_ss_label (mm:ss)', key: 'time_mm_ss', width: 18 },
     { header: 'gameplay_elapsed_minutes_decimal', key: 'elapsed_min', width: 22 },
     { header: 'minute_number', key: 'minute_number', width: 12 },
-    { header: 'paddle_position_px', key: 'paddle_position_px', width: 18 },
-    { header: 'paddle_delta_px_in_this_second', key: 'paddle_delta_px', width: 26 },
-    { header: 'paddle_speed_px_per_second', key: 'paddle_speed', width: 22 },
+    { header: 'paddle_position_px (slider position)', key: 'paddle_position_px', width: 28 },
+    { header: 'paddle_delta_px_in_this_second (slider left-right change)', key: 'paddle_delta_px', width: 38 },
+    { header: 'paddle_speed_px_per_second (slider speed)', key: 'paddle_speed', width: 32 },
     {
       header: `slider_move_0_or_1_eps_${PADDLE_MOVE_EPSILON_PX}px`,
       key: 'slider_move',
       width: 22,
     },
-    { header: 'cumulative_slider_move_seconds', key: 'cum_move_sec', width: 24 },
+    { header: 'cumulative_slider_move_seconds (s)', key: 'cum_move_sec', width: 30 },
     {
       header: 'cumulative_slider_distance_px',
       key: 'cum_dist_px',
       width: 22,
     },
-    { header: 'eye_offset_x_unitless', key: 'eye_x', width: 18 },
-    { header: 'eye_offset_y_unitless', key: 'eye_y', width: 18 },
-    { header: 'eye_confidence_0_to_1', key: 'eye_conf', width: 16 },
+    { header: 'eye_offset_x_unitless (eyeball left-right)', key: 'eye_x', width: 34 },
+    { header: 'eye_offset_y_unitless (eyeball up-down)', key: 'eye_y', width: 32 },
+    { header: 'eye_confidence_0_to_1 (tracking reliability)', key: 'eye_conf', width: 36 },
     {
-      header: 'eye_movement_norm_per_s_1Hz',
+      header: 'eye_movement_norm_per_s_1Hz (normalized/s)',
       key: 'eye_mov_1hz',
       width: 22,
     },
-    { header: 'blink_this_second_0_or_1', key: 'blink', width: 18 },
-    { header: 'cumulative_blinks_1Hz', key: 'cum_blink', width: 18 },
+    { header: 'blink_this_second_0_or_1 (blink happened)', key: 'blink', width: 30 },
+    { header: 'cumulative_blinks_1Hz (running blink count)', key: 'cum_blink', width: 34 },
     {
-      header: 'eye_path_norm_from_high_rate_frames',
+      header: 'eye_path_norm_from_high_rate_frames (normalized)',
       key: 'eye_path_hr',
       width: 28,
     },
-    { header: 'high_rate_frames_in_this_second', key: 'hr_frame_n', width: 22 },
-    { header: 'blink_edges_high_rate_in_second', key: 'hr_blink_edge', width: 24 },
+    { header: 'high_rate_frames_in_this_second (rows)', key: 'hr_frame_n', width: 30 },
+    { header: 'blink_edges_high_rate_in_second (count)', key: 'hr_blink_edge', width: 32 },
   ];
 
   let cumMoveSec = 0;
@@ -329,6 +429,9 @@ function addPerSecondFullSheet(workbook, samples, framesBySecond) {
 
     sheet.addRow({
       second_index: si,
+      set_number: Number(s.set_number || 1),
+      set_label: s.set_label || '',
+      control_mode: s.control_mode || 'pointer',
       time_mm_ss: formatMmSs(si),
       elapsed_min: Number((si / 60).toFixed(6)),
       minute_number: minuteBucketFromSecond(si),
@@ -543,14 +646,17 @@ function addEyeFramesRawSheet(workbook, frames) {
   });
   sheet.columns = [
     { header: 'row_id_db', key: 'row_id_db', width: 12 },
-    { header: 'offset_ms', key: 'offset_ms', width: 14 },
-    { header: 'time_sec_decimal', key: 'time_sec', width: 16 },
-    { header: 'gameplay_second_bucket', key: 'gsec', width: 18 },
-    { header: 'minute_bucket', key: 'gmin', width: 14 },
-    { header: 'eye_offset_x_unitless', key: 'ex', width: 18 },
-    { header: 'eye_offset_y_unitless', key: 'ey', width: 18 },
-    { header: 'eye_confidence_0_to_1', key: 'ec', width: 18 },
-    { header: 'blink_detected_0_or_1', key: 'bk', width: 18 },
+    { header: 'offset_ms (ms)', key: 'offset_ms', width: 18 },
+    { header: 'set_number (set no)', key: 'set_number', width: 16 },
+    { header: 'set_label (instruction group)', key: 'set_label', width: 30 },
+    { header: 'control_mode (input type)', key: 'control_mode', width: 20 },
+    { header: 'time_sec_decimal (s)', key: 'time_sec', width: 20 },
+    { header: 'gameplay_second_bucket (s)', key: 'gsec', width: 24 },
+    { header: 'minute_bucket (min)', key: 'gmin', width: 18 },
+    { header: 'eye_offset_x_unitless (eyeball left-right)', key: 'ex', width: 34 },
+    { header: 'eye_offset_y_unitless (eyeball up-down)', key: 'ey', width: 32 },
+    { header: 'eye_confidence_0_to_1 (tracking reliability)', key: 'ec', width: 36 },
+    { header: 'blink_detected_0_or_1 (blink happened)', key: 'bk', width: 32 },
     {
       header: 'norm_distance_from_previous_frame_row',
       key: 'step',
@@ -583,6 +689,9 @@ function addEyeFramesRawSheet(workbook, frames) {
     sheet.addRow({
       row_id_db: f.id,
       offset_ms: ms,
+      set_number: Number(f.set_number || 1),
+      set_label: f.set_label || '',
+      control_mode: f.control_mode || 'pointer',
       time_sec: Number.isFinite(ms) ? Number((ms / 1000).toFixed(6)) : '',
       gsec: Number.isFinite(ms) ? gameplaySecondFromOffsetMs(ms) : '',
       gmin: Number.isFinite(ms) ? minuteBucketFromOffsetMs(ms) : '',
@@ -632,6 +741,7 @@ async function buildSessionExcelBuffer(sessionId) {
     totalPaddleDistancePx,
     blinkSecondsSum,
   });
+  addSetSummarySheet(workbook, samples, eyeFrames);
   addPerSecondFullSheet(workbook, samples, framesBySecond);
   addPerMinuteSummarySheet(workbook, samples, framesByMinute);
   addEyePerSecondFromFramesSheet(workbook, framesBySecond, maxSecondFromSamples);

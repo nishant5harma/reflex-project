@@ -5,6 +5,9 @@ const MAX_EYE_FRAMES_IN_RESPONSE = 5000;
 function mapSessionSamples(rows) {
   return rows.map((row) => ({
     secondIndex: row.second_index,
+    setNumber: Number(row.set_number || 1),
+    setLabel: row.set_label || 'Dominant hand',
+    controlMode: row.control_mode || 'pointer',
     paddlePosition: Number(row.paddle_position),
     paddleDelta: Number(row.paddle_delta),
     paddleSpeedPerSecond: Number(row.paddle_speed_per_second),
@@ -19,6 +22,9 @@ function mapSessionSamples(rows) {
 function mapEyeFrameRows(rows) {
   return rows.map((row) => ({
     offsetMs: row.offset_ms,
+    setNumber: Number(row.set_number || 1),
+    setLabel: row.set_label || 'Dominant hand',
+    controlMode: row.control_mode || 'pointer',
     eyeOffsetX: row.eye_offset_x !== null ? Number(row.eye_offset_x) : null,
     eyeOffsetY: row.eye_offset_y !== null ? Number(row.eye_offset_y) : null,
     eyeConfidence: row.eye_confidence !== null ? Number(row.eye_confidence) : null,
@@ -33,7 +39,7 @@ async function loadEyeFramesForSession(sessionId, totalCount) {
 
   if (totalCount <= MAX_EYE_FRAMES_IN_RESPONSE) {
     const [frames] = await db.query(
-      `SELECT offset_ms, eye_offset_x, eye_offset_y, eye_confidence, blink_detected
+      `SELECT offset_ms, set_number, set_label, control_mode, eye_offset_x, eye_offset_y, eye_confidence, blink_detected
        FROM game_session_eye_frames
        WHERE session_id = ?
        ORDER BY offset_ms ASC`,
@@ -48,9 +54,12 @@ async function loadEyeFramesForSession(sessionId, totalCount) {
 
   const step = Math.ceil(totalCount / MAX_EYE_FRAMES_IN_RESPONSE);
   const [frames] = await db.query(
-    `SELECT offset_ms, eye_offset_x, eye_offset_y, eye_confidence, blink_detected
+    `SELECT offset_ms, set_number, set_label, control_mode, eye_offset_x, eye_offset_y, eye_confidence, blink_detected
      FROM (
        SELECT offset_ms,
+              set_number,
+              set_label,
+              control_mode,
               eye_offset_x,
               eye_offset_y,
               eye_confidence,
@@ -76,6 +85,7 @@ function mapSessionListRow(entry) {
     id: entry.id,
     startedAt: entry.started_at,
     endedAt: entry.ended_at,
+    sessionType: entry.session_type,
     durationSeconds: entry.duration_seconds,
     finalScore: entry.final_score,
     totalBlinks: entry.total_blinks,
@@ -94,6 +104,7 @@ async function listCompletedSessionsForUser(userId, { includeUserColumns = false
     `SELECT gs.id,
             gs.started_at,
             gs.ended_at,
+            gs.session_type,
             gs.duration_seconds,
             gs.final_score,
             gs.total_blinks,
@@ -121,6 +132,7 @@ async function getSessionTelemetryBundle(sessionId, userIdConstraint, options = 
          user_id,
          started_at,
          ended_at,
+         session_type,
          duration_seconds,
          final_score,
          total_blinks,
@@ -140,6 +152,9 @@ async function getSessionTelemetryBundle(sessionId, userIdConstraint, options = 
 
   const [samples] = await db.query(
     `SELECT second_index,
+            set_number,
+            set_label,
+            control_mode,
             paddle_position,
             paddle_delta,
             paddle_speed_per_second,
@@ -166,6 +181,7 @@ async function getSessionTelemetryBundle(sessionId, userIdConstraint, options = 
     userId: session.user_id,
     startedAt: session.started_at,
     endedAt: session.ended_at,
+    sessionType: session.session_type,
     durationSeconds: session.duration_seconds,
     finalScore: session.final_score,
     totalBlinks: session.total_blinks,

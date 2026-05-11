@@ -74,6 +74,9 @@ function SessionDetailModal({ sessionId, apiMode, open, onClose }) {
         acc.running + (row.blinkDetected ? 1 : 0)
       acc.rows.push({
         second: row.secondIndex,
+        setNumber: row.setNumber ?? 1,
+        setLabel: row.setLabel ?? '',
+        controlMode: row.controlMode ?? 'pointer',
         paddle: row.paddlePosition,
         paddleDelta: row.paddleDelta,
         paddleSpeedPerSecond: row.paddleSpeedPerSecond,
@@ -91,11 +94,28 @@ function SessionDetailModal({ sessionId, apiMode, open, onClose }) {
 
   const eyeFrameData = eyeFrames.map((f) => ({
     t: f.offsetMs / 1000,
+    setNumber: f.setNumber ?? 1,
+    setLabel: f.setLabel ?? '',
+    controlMode: f.controlMode ?? 'pointer',
     eyeX: f.eyeOffsetX,
     eyeY: f.eyeOffsetY,
     conf: f.eyeConfidence,
     blinkFlag: f.blinkDetected ? 1 : 0,
   }))
+
+  const setBuckets = [1, 2, 3].map((setNumber) => {
+    const perSetSamples = perSecondData.filter((row) => row.setNumber === setNumber)
+    const perSetFrames = eyeFrameData.filter((row) => row.setNumber === setNumber)
+    const setLabel = perSetSamples[0]?.setLabel || perSetFrames[0]?.setLabel || `Set ${setNumber}`
+    const controlMode = perSetSamples[0]?.controlMode || perSetFrames[0]?.controlMode || 'pointer'
+    return {
+      setNumber,
+      setLabel,
+      controlMode,
+      perSetSamples,
+      perSetFrames,
+    }
+  })
 
   return (
     <div className="session-modal-backdrop" role="presentation" onMouseDown={onClose}>
@@ -143,6 +163,10 @@ function SessionDetailModal({ sessionId, apiMode, open, onClose }) {
                 {session.totalBlinks}
               </div>
               <div className="session-meta-item">
+                <strong>Session type</strong>
+                {session.sessionType || 'three_set_reflex'}
+              </div>
+              <div className="session-meta-item">
                 <strong>Started</strong>
                 {session.startedAt ? new Date(session.startedAt).toLocaleString() : '—'}
               </div>
@@ -159,108 +183,60 @@ function SessionDetailModal({ sessionId, apiMode, open, onClose }) {
               </p>
             ) : null}
 
+            <div className="session-chart-block">
+              <h4>Data collection summary (set-wise)</h4>
+              <p className="muted-text">
+                Technical + normal names: eyeOffsetX (eyeball left-right), eyeOffsetY (eyeball up-down),
+                eyeConfidence (tracking reliability), blinkDetected (blink happened), paddleX (slider position).
+              </p>
+              <p className="muted-text">
+                Units: secondIndex (s), offsetMs (ms), paddleX/paddleDelta (px), paddleSpeedPerSecond (px/s),
+                eyeOffsetX/eyeOffsetY (normalized), eyeConfidence (0-1), blinkDetected (0/1).
+              </p>
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Set</th>
+                      <th>Instruction Group</th>
+                      <th>Control</th>
+                      <th>Paddle/Eye rows</th>
+                      <th>Eye frames</th>
+                      <th>Blink seconds</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {setBuckets.map((bucket) => (
+                      <tr key={bucket.setNumber}>
+                        <td>{bucket.setNumber}</td>
+                        <td>{bucket.setLabel}</td>
+                        <td>{bucket.controlMode}</td>
+                        <td>{bucket.perSetSamples.length}</td>
+                        <td>{bucket.perSetFrames.length}</td>
+                        <td>
+                          {bucket.perSetSamples.reduce(
+                            (sum, row) => sum + (row.blinkThisSecond ? 1 : 0),
+                            0
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
             <div className="session-charts">
-              <div className="session-chart-block">
-                <h4>Paddle position, delta, and speed (each second)</h4>
-                <div className="chart-wrap chart-wrap--tall">
-                  <ResponsiveContainer width="100%" height={260}>
-                    <LineChart data={perSecondData}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(148,163,184,0.4)" />
-                      <XAxis dataKey="second" tick={{ fill: '#64748b', fontSize: 12 }} />
-                      <YAxis tick={{ fill: '#64748b', fontSize: 12 }} />
-                      <Tooltip
-                        contentStyle={{
-                          borderRadius: 12,
-                          border: '1px solid rgba(148,163,184,0.35)',
-                        }}
-                      />
-                      <Legend />
-                      <Line type="monotone" dataKey="paddle" stroke="#6366f1" dot={false} name="Position" strokeWidth={2} />
-                      <Line type="monotone" dataKey="paddleDelta" stroke="#06b6d4" dot={false} name="Δ / s" strokeWidth={2} />
-                      <Line type="monotone" dataKey="paddleSpeedPerSecond" stroke="#7c3aed" dot={false} name="Speed / s" strokeWidth={2} />
-                    </LineChart>
-                  </ResponsiveContainer>
-                </div>
-              </div>
-
-              <div className="session-chart-block">
-                <h4>Eye movement & confidence (per second)</h4>
-                <div className="chart-wrap chart-wrap--tall">
-                  <ResponsiveContainer width="100%" height={260}>
-                    <LineChart data={perSecondData}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(148,163,184,0.4)" />
-                      <XAxis dataKey="second" tick={{ fill: '#64748b', fontSize: 12 }} />
-                      <YAxis yAxisId="left" tick={{ fill: '#64748b', fontSize: 12 }} />
-                      <YAxis yAxisId="right" orientation="right" domain={[0, 1]} tick={{ fill: '#64748b', fontSize: 12 }} />
-                      <Tooltip
-                        contentStyle={{
-                          borderRadius: 12,
-                          border: '1px solid rgba(148,163,184,0.35)',
-                        }}
-                      />
-                      <Legend />
-                      <Line yAxisId="left" type="monotone" dataKey="eyeMove" stroke="#a855f7" dot={false} name="Eye move / s" strokeWidth={2} />
-                      <Line yAxisId="right" type="monotone" dataKey="eyeConf" stroke="#f59e0b" dot={false} name="Confidence" strokeWidth={2} />
-                    </LineChart>
-                  </ResponsiveContainer>
-                </div>
-              </div>
-
-              <div className="session-chart-block">
-                <h4>Gaze offsets per second</h4>
-                <div className="chart-wrap chart-wrap--tall">
-                  <ResponsiveContainer width="100%" height={260}>
-                    <LineChart data={perSecondData}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(148,163,184,0.4)" />
-                      <XAxis dataKey="second" tick={{ fill: '#64748b', fontSize: 12 }} />
-                      <YAxis tick={{ fill: '#64748b', fontSize: 12 }} />
-                      <Tooltip
-                        contentStyle={{
-                          borderRadius: 12,
-                          border: '1px solid rgba(148,163,184,0.35)',
-                        }}
-                      />
-                      <Legend />
-                      <Line type="monotone" dataKey="eyeX" stroke="#10b981" dot={false} name="Offset X" strokeWidth={2} />
-                      <Line type="monotone" dataKey="eyeY" stroke="#ec4899" dot={false} name="Offset Y" strokeWidth={2} />
-                    </LineChart>
-                  </ResponsiveContainer>
-                </div>
-              </div>
-
-              <div className="session-chart-block">
-                <h4>Blink markers (seconds with blink) & running count</h4>
-                <div className="chart-wrap chart-wrap--tall">
-                  <ResponsiveContainer width="100%" height={260}>
-                    <ComposedChart data={perSecondData}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(148,163,184,0.4)" />
-                      <XAxis dataKey="second" tick={{ fill: '#64748b', fontSize: 12 }} />
-                      <YAxis yAxisId="left" tick={{ fill: '#64748b', fontSize: 12 }} />
-                      <YAxis yAxisId="right" orientation="right" tick={{ fill: '#64748b', fontSize: 12 }} />
-                      <Tooltip
-                        contentStyle={{
-                          borderRadius: 12,
-                          border: '1px solid rgba(148,163,184,0.35)',
-                        }}
-                      />
-                      <Legend />
-                      <Bar yAxisId="left" dataKey="blinkThisSecond" fill="rgba(99,102,241,0.55)" name="Blink (second)" />
-                      <Line yAxisId="right" type="stepAfter" dataKey="cumulativeBlinks" stroke="#334155" dot={false} name="Running total (samples)" strokeWidth={2} />
-                    </ComposedChart>
-                  </ResponsiveContainer>
-                </div>
-              </div>
-
-              <div className="session-chart-block">
-                <h4>High-rate eye trace (time in session, seconds)</h4>
-                {eyeFrameData.length === 0 ? (
-                  <p className="muted-text">No high-frequency eye frames recorded for this session.</p>
-                ) : (
+              {setBuckets.map((bucket) => (
+                <div key={bucket.setNumber} className="session-chart-block">
+                  <h4>
+                    Set {bucket.setNumber} - {bucket.setLabel} ({bucket.controlMode})
+                  </h4>
                   <div className="chart-wrap chart-wrap--tall">
-                    <ResponsiveContainer width="100%" height={280}>
-                      <LineChart data={eyeFrameData}>
+                    <ResponsiveContainer width="100%" height={230}>
+                      <LineChart data={bucket.perSetSamples}>
                         <CartesianGrid strokeDasharray="3 3" stroke="rgba(148,163,184,0.4)" />
-                        <XAxis dataKey="t" tick={{ fill: '#64748b', fontSize: 11 }} />
+                        <XAxis dataKey="second" tick={{ fill: '#64748b', fontSize: 12 }} />
                         <YAxis tick={{ fill: '#64748b', fontSize: 12 }} />
                         <Tooltip
                           contentStyle={{
@@ -269,14 +245,56 @@ function SessionDetailModal({ sessionId, apiMode, open, onClose }) {
                           }}
                         />
                         <Legend />
-                        <Line type="monotone" dataKey="eyeX" stroke="#14b8a6" dot={false} name="Eye X" strokeWidth={1} />
-                        <Line type="monotone" dataKey="eyeY" stroke="#eab308" dot={false} name="Eye Y" strokeWidth={1} />
-                        <Line type="monotone" dataKey="conf" stroke="#94a3b8" dot={false} name="Confidence" strokeWidth={1} />
+                        <Line type="monotone" dataKey="paddle" stroke="#6366f1" dot={false} name="paddleX (slider position, px)" strokeWidth={2} />
+                        <Line type="monotone" dataKey="paddleSpeedPerSecond" stroke="#7c3aed" dot={false} name="paddleSpeedPerSecond (slider speed, px/s)" strokeWidth={2} />
+                        <Line type="monotone" dataKey="eyeMove" stroke="#a855f7" dot={false} name="eyeMovementPerSecond (eyeball movement, normalized/s)" strokeWidth={2} />
                       </LineChart>
                     </ResponsiveContainer>
                   </div>
-                )}
-              </div>
+                  <div className="chart-wrap chart-wrap--tall">
+                    <ResponsiveContainer width="100%" height={230}>
+                      <ComposedChart data={bucket.perSetSamples}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="rgba(148,163,184,0.4)" />
+                        <XAxis dataKey="second" tick={{ fill: '#64748b', fontSize: 12 }} />
+                        <YAxis yAxisId="left" tick={{ fill: '#64748b', fontSize: 12 }} />
+                        <YAxis yAxisId="right" orientation="right" tick={{ fill: '#64748b', fontSize: 12 }} />
+                        <Tooltip
+                          contentStyle={{
+                            borderRadius: 12,
+                            border: '1px solid rgba(148,163,184,0.35)',
+                          }}
+                        />
+                        <Legend />
+                        <Bar yAxisId="left" dataKey="blinkThisSecond" fill="rgba(99,102,241,0.55)" name="blinkDetected (blink happened this second, 0/1)" />
+                        <Line yAxisId="right" type="stepAfter" dataKey="cumulativeBlinks" stroke="#334155" dot={false} name="cumulativeBlinks (running blink count)" strokeWidth={2} />
+                      </ComposedChart>
+                    </ResponsiveContainer>
+                  </div>
+                  <div className="chart-wrap chart-wrap--tall">
+                    {bucket.perSetFrames.length === 0 ? (
+                      <p className="muted-text">No high-rate eye frames in this set.</p>
+                    ) : (
+                      <ResponsiveContainer width="100%" height={230}>
+                        <LineChart data={bucket.perSetFrames}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="rgba(148,163,184,0.4)" />
+                          <XAxis dataKey="t" tick={{ fill: '#64748b', fontSize: 11 }} />
+                          <YAxis tick={{ fill: '#64748b', fontSize: 12 }} />
+                          <Tooltip
+                            contentStyle={{
+                              borderRadius: 12,
+                              border: '1px solid rgba(148,163,184,0.35)',
+                            }}
+                          />
+                          <Legend />
+                          <Line type="monotone" dataKey="eyeX" stroke="#14b8a6" dot={false} name="eyeOffsetX (eyeball left-right, normalized)" strokeWidth={1} />
+                          <Line type="monotone" dataKey="eyeY" stroke="#eab308" dot={false} name="eyeOffsetY (eyeball up-down, normalized)" strokeWidth={1} />
+                          <Line type="monotone" dataKey="conf" stroke="#94a3b8" dot={false} name="eyeConfidence (tracking reliability, 0-1)" strokeWidth={1} />
+                        </LineChart>
+                      </ResponsiveContainer>
+                    )}
+                  </div>
+                </div>
+              ))}
             </div>
           </>
         ) : null}

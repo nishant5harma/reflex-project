@@ -107,6 +107,23 @@
   max-width: 900px;
 }
 
+/* Dashboards: edge-to-edge content, no centered narrow column */
+.page.page--full {
+  justify-content: flex-start;
+  align-items: stretch;
+  flex-direction: column;
+  width: 100%;
+  max-width: 100%;
+  padding: 14px clamp(12px, 2vw, 24px) 28px;
+  box-sizing: border-box;
+}
+
+.card.wide.card--fluid {
+  max-width: none;
+  width: 100%;
+  flex: 1 1 auto;
+}
+
 .auth-card {
   max-width: 460px;
 }
@@ -303,6 +320,41 @@ th {
   margin: 14px 0;
   display: flex;
   justify-content: flex-start;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.session-guide-list {
+  margin: 8px 0 0 18px;
+  color: #334155;
+  display: grid;
+  gap: 6px;
+}
+
+.set-popup-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 260;
+  background: rgba(15, 23, 42, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.set-popup-card {
+  width: min(520px, 100%);
+  border-radius: 18px;
+  background: #ffffff;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  padding: 18px;
+}
+
+.set-countdown-text {
+  font-size: 24px;
+  font-weight: 700;
+  color: #1d4ed8;
+  margin: 8px 0 0;
 }
 
 .filter-row {

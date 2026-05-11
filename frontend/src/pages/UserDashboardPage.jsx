@@ -12,6 +12,33 @@ function UserDashboardPage() {
   const [sessions, setSessions] = useState([])
   const [error, setError] = useState('')
   const [detailSessionId, setDetailSessionId] = useState(null)
+  const [exportingSessionId, setExportingSessionId] = useState(null)
+  const handleExportSessionExcel = async (sessionId) => {
+    try {
+      setExportingSessionId(sessionId)
+      const response = await api.get(`/user/game-sessions/${sessionId}/export`, {
+        responseType: 'blob',
+      })
+      const blob =
+        response.data instanceof Blob
+          ? response.data
+          : new Blob([response.data], {
+              type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            })
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = `session_${sessionId}_telemetry_export.xlsx`
+      anchor.click()
+      URL.revokeObjectURL(url)
+      setError('')
+    } catch (err) {
+      setError(err.response?.data?.message || 'Failed to export session')
+    } finally {
+      setExportingSessionId(null)
+    }
+  }
+
 
   useEffect(() => {
     let cancelled = false
@@ -46,8 +73,8 @@ function UserDashboardPage() {
   }
 
   return (
-    <main className="page">
-      <div className="card wide">
+    <main className="page page--full">
+      <div className="card wide card--fluid">
         <div className="top-bar">
           <h1 className="card-title">User Dashboard</h1>
           <button onClick={handleLogout} type="button" className="ghost-btn">
@@ -113,13 +140,14 @@ function UserDashboardPage() {
                   <th>Blinks</th>
                   <th>Samples</th>
                   <th>Ended</th>
-                  <th />
+                  <th>Details</th>
+                  <th>Export</th>
                 </tr>
               </thead>
               <tbody>
                 {sessions.length === 0 ? (
                   <tr>
-                    <td colSpan={8}>No completed sessions yet. Finish a Brick Ball round to capture telemetry.</td>
+                    <td colSpan={9}>No completed sessions yet. Finish a Brick Ball round to capture telemetry.</td>
                   </tr>
                 ) : (
                   sessions.map((entry, index) => (
@@ -138,6 +166,16 @@ function UserDashboardPage() {
                           onClick={() => setDetailSessionId(entry.id)}
                         >
                           View details
+                        </button>
+                      </td>
+                      <td>
+                        <button
+                          type="button"
+                          className="table-excel-btn"
+                          onClick={() => handleExportSessionExcel(entry.id)}
+                          disabled={exportingSessionId === entry.id}
+                        >
+                          {exportingSessionId === entry.id ? 'Downloading...' : 'Excel'}
                         </button>
                       </td>
                     </tr>

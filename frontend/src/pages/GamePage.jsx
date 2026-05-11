@@ -30,6 +30,12 @@ const BRICK_TOP = 60
 const PADDLE_WIDTH = 130
 const PADDLE_HEIGHT = 14
 const BALL_RADIUS = 10
+const KEYBOARD_STEP = 44
+const SETS = [
+  { number: 1, seconds: 30, label: 'Dominant hand', controlMode: 'pointer', instruction: 'Set 1: Use your dominant hand on mouse/trackpad.' },
+  { number: 2, seconds: 30, label: 'Non-dominant hand', controlMode: 'pointer', instruction: 'Set 2: Use your non-dominant hand on mouse/trackpad.' },
+  { number: 3, seconds: 60, label: 'Keyboard control', controlMode: 'keyboard', instruction: 'Set 3: Press P for right and Q for left repeatedly.' },
+]
 
 function createBricks() {
   const totalGap = BRICK_GAP * (BRICK_COLS - 1)
@@ -60,7 +66,7 @@ function GamePage() {
 
   const [score, setScore] = useState(0)
   const [topScore, setTopScore] = useState(0)
-  const [status, setStatus] = useState('Tap Start to play')
+  const [status, setStatus] = useState('Read guide and start 3-set session')
   const [isRunning, setIsRunning] = useState(false)
   const [gameKey, setGameKey] = useState(0)
   const [cameraEnabled, setCameraEnabled] = useState(false)
@@ -70,6 +76,10 @@ function GamePage() {
   const [eyeStoredCount, setEyeStoredCount] = useState(0)
   const [blinkCount, setBlinkCount] = useState(0)
   const [faceDetected, setFaceDetected] = useState(false)
+  const [showGuide, setShowGuide] = useState(true)
+  const [activeSet, setActiveSet] = useState(SETS[0])
+  const [transitionModal, setTransitionModal] = useState(null)
+  const activeSetRef = useRef(SETS[0])
 
   const [eyeSeries, setEyeSeries] = useState([])
   const [paddleSeries, setPaddleSeries] = useState([])
@@ -81,6 +91,8 @@ function GamePage() {
   const prevPaddleTelemetryRef = useRef(0)
   const sessionIdRef = useRef(null)
   const finishingRef = useRef(false)
+  const setElapsedRef = useRef(0)
+  const countdownTimerRef = useRef(null)
 
   const lastGazeRef = useRef({ eyeOffsetX: null, eyeOffsetY: null, eyeConfidence: null })
   const lastValidGazeRef = useRef({ eyeOffsetX: 0, eyeOffsetY: 0, eyeConfidence: 0 })
@@ -98,6 +110,7 @@ function GamePage() {
   const prevSecondGazeRef = useRef({ eyeOffsetX: 0, eyeOffsetY: 0 })
 
   const endGameRef = useRef(async () => {})
+  const finishSetRef = useRef(async () => {})
 
   useEffect(() => {
     getTopLocalScore().then(setTopScore).catch(() => setTopScore(0))
@@ -106,6 +119,10 @@ function GamePage() {
   useEffect(() => {
     runningRef.current = isRunning
   }, [isRunning])
+
+  useEffect(() => {
+    activeSetRef.current = activeSet
+  }, [activeSet])
 
   useEffect(() => {
     lastGazeRef.current = { eyeOffsetX: null, eyeOffsetY: null, eyeConfidence: null }
@@ -231,8 +248,12 @@ function GamePage() {
             const key = sessionStorageKeyRef.current
             if (key && cameraEnabled && runningRef.current && offsets) {
               const offsetMs = Math.round(performance.now() - sessionPerfStartRef.current)
+              const setInfo = activeSetRef.current
               pendingEyeFramesRef.current.push({
                 offsetMs,
+                setNumber: setInfo.number,
+                setLabel: setInfo.label,
+                controlMode: setInfo.controlMode,
                 eyeOffsetX: offsets.eyeOffsetX,
                 eyeOffsetY: offsets.eyeOffsetY,
                 eyeConfidence: offsets.eyeConfidence,
@@ -266,15 +287,15 @@ function GamePage() {
     }
 
     telemetryEnabledRef.current = true
-    telemetrySamplesRef.current = []
-    telemetryElapsedRef.current = 0
     prevPaddleTelemetryRef.current = stateRef.current?.paddleX ?? WIDTH / 2 - PADDLE_WIDTH / 2
 
     const intervalId = window.setInterval(() => {
       if (!telemetryEnabledRef.current || !stateRef.current) return
 
       telemetryElapsedRef.current += 1
+      setElapsedRef.current += 1
       const secondIndex = telemetryElapsedRef.current
+      const setInfo = activeSetRef.current
       const paddlePosition = stateRef.current.paddleX
       const paddleDelta = paddlePosition - prevPaddleTelemetryRef.current
       const paddleSpeedPerSecond = Math.abs(paddleDelta)
@@ -291,6 +312,9 @@ function GamePage() {
 
       const sample = {
         secondIndex,
+        setNumber: setInfo.number,
+        setLabel: setInfo.label,
+        controlMode: setInfo.controlMode,
         paddlePosition,
         paddleDelta,
         paddleSpeedPerSecond: Number(paddleSpeedPerSecond.toFixed(4)),
@@ -319,6 +343,10 @@ function GamePage() {
         ...prev,
         { second: secondIndex, paddleX: paddlePosition, paddleDelta, paddleSpeedPerSecond },
       ])
+
+      if (setElapsedRef.current >= setInfo.seconds) {
+        finishSetRef.current(`Set ${setInfo.number} completed`)
+      }
     }, 1000)
 
     return () => {
@@ -371,7 +399,7 @@ function GamePage() {
 
       try {
         await api.post('/user/scores', { score: finalScoreValue })
-      } catch (_error) {
+      } catch {
         // leaderboard insert is best-effort
       }
 
@@ -407,7 +435,7 @@ function GamePage() {
             eyeStoredCountRef.current = 0
             setEyeStoredCount(0)
           }
-        } catch (_error) {
+        } catch {
           setStatus(`${message} (telemetry / eye data not synced — still in IndexedDB)`)
         }
       }
@@ -416,7 +444,64 @@ function GamePage() {
     }
   }, [])
 
+  const launchSet = (setIndex) => {
+    const setInfo = SETS[setIndex]
+    setActiveSet(setInfo)
+    activeSetRef.current = setInfo
+    setElapsedRef.current = 0
+    setTransitionModal(null)
+    setStatus(`Set ${setInfo.number} started: ${setInfo.instruction}`)
+    stateRef.current = {
+      ...(stateRef.current || {}),
+      bricks: createBricks(),
+      paddleX: WIDTH / 2 - PADDLE_WIDTH / 2,
+      ballX: WIDTH / 2,
+      ballY: HEIGHT - 64,
+      ballDx: 4,
+      ballDy: -4,
+    }
+    setGameKey((value) => value + 1)
+    setIsRunning(true)
+  }
+
+  useEffect(() => {
+    finishSetRef.current = async (reasonMessage) => {
+      if (!runningRef.current) return
+      const currentSetNumber = activeSetRef.current.number
+      const nextSetIndex = currentSetNumber
+
+      setIsRunning(false)
+      cancelAnimationFrame(animationRef.current)
+
+      if (nextSetIndex >= SETS.length) {
+        await endGameRef.current('Session completed: all 3 sets finished')
+        return
+      }
+
+      setStatus(`${reasonMessage}. Open popup and continue when ready.`)
+      setTransitionModal({
+        reason: reasonMessage,
+        nextSetIndex,
+        phase: 'instruction',
+        countdown: 5,
+      })
+    }
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      if (countdownTimerRef.current) {
+        window.clearInterval(countdownTimerRef.current)
+      }
+    }
+  }, [])
+
   const startGame = async () => {
+    if (countdownTimerRef.current) {
+      window.clearInterval(countdownTimerRef.current)
+      countdownTimerRef.current = null
+    }
+    setShowGuide(false)
     finishingRef.current = false
     telemetrySamplesRef.current = []
     telemetryElapsedRef.current = 0
@@ -431,6 +516,10 @@ function GamePage() {
     lastValidGazeRef.current = { eyeOffsetX: 0, eyeOffsetY: 0, eyeConfidence: 0 }
     prevSecondGazeRef.current = { eyeOffsetX: 0, eyeOffsetY: 0 }
     sessionIdRef.current = null
+    setActiveSet(SETS[0])
+    activeSetRef.current = SETS[0]
+    setTransitionModal(null)
+    setElapsedRef.current = 0
 
     try {
       const response = await api.post('/user/game-sessions')
@@ -447,9 +536,7 @@ function GamePage() {
     eyeStoredCountRef.current = 0
     setEyeStoredCount(0)
 
-    setGameKey((value) => value + 1)
-
-    const initial = {
+    stateRef.current = {
       score: 0,
       bricks: createBricks(),
       paddleX: WIDTH / 2 - PADDLE_WIDTH / 2,
@@ -458,19 +545,27 @@ function GamePage() {
       ballDx: 4,
       ballDy: -4,
     }
-
-    stateRef.current = initial
     setScore(0)
-    if (!cameraEnabled) {
-      setStatus('Game running (camera off, eye tracking paused)')
-    } else if (!detectorReady) {
-      setStatus('Game running (eye tracker loading...)')
-    } else if (!faceDetected) {
-      setStatus('Game running (face lock not ready yet)')
-    } else {
-      setStatus('Game running with eye tracking')
+    launchSet(0)
+  }
+
+  const handleReadyForNextSet = () => {
+    if (!transitionModal || transitionModal.phase !== 'instruction') return
+    let counter = 5
+    setTransitionModal((prev) => (prev ? { ...prev, phase: 'countdown', countdown: counter } : prev))
+    if (countdownTimerRef.current) {
+      window.clearInterval(countdownTimerRef.current)
     }
-    setIsRunning(true)
+    countdownTimerRef.current = window.setInterval(() => {
+      counter -= 1
+      if (counter <= 0) {
+        window.clearInterval(countdownTimerRef.current)
+        countdownTimerRef.current = null
+        launchSet(transitionModal.nextSetIndex)
+        return
+      }
+      setTransitionModal((prev) => (prev ? { ...prev, countdown: counter } : prev))
+    }, 1000)
   }
 
   useEffect(() => {
@@ -550,12 +645,12 @@ function GamePage() {
 
       const remaining = state.bricks.filter((brick) => brick.alive).length
       if (remaining === 0) {
-        await endGameRef.current(`You win! Final score: ${state.score}`)
+        await finishSetRef.current(`Set ${activeSetRef.current.number}: all bricks cleared`)
         return
       }
 
       if (state.ballY > HEIGHT + BALL_RADIUS) {
-        await endGameRef.current(`Game over. Final score: ${state.score}`)
+        await finishSetRef.current(`Set ${activeSetRef.current.number}: game over (out)`)
         return
       }
 
@@ -567,6 +662,7 @@ function GamePage() {
     animationRef.current = requestAnimationFrame(tick)
 
     const onMove = (event) => {
+      if (activeSetRef.current.controlMode !== 'pointer') return
       const rect = canvas.getBoundingClientRect()
       const clientX = event.touches ? event.touches[0].clientX : event.clientX
       const nextX = clientX - rect.left - PADDLE_WIDTH / 2
@@ -574,13 +670,28 @@ function GamePage() {
       state.paddleX = Math.max(0, Math.min(WIDTH - PADDLE_WIDTH, nextX))
     }
 
+    const onKeyDown = (event) => {
+      if (activeSetRef.current.controlMode !== 'keyboard') return
+      const state = stateRef.current
+      if (!state) return
+      const step = event.repeat ? KEYBOARD_STEP + 10 : KEYBOARD_STEP
+      if (event.key === 'q' || event.key === 'Q') {
+        state.paddleX = Math.max(0, state.paddleX - step)
+      }
+      if (event.key === 'p' || event.key === 'P') {
+        state.paddleX = Math.min(WIDTH - PADDLE_WIDTH, state.paddleX + step)
+      }
+    }
+
     canvas.addEventListener('mousemove', onMove)
     canvas.addEventListener('touchmove', onMove, { passive: true })
+    window.addEventListener('keydown', onKeyDown)
 
     return () => {
       cancelAnimationFrame(animationRef.current)
       canvas.removeEventListener('mousemove', onMove)
       canvas.removeEventListener('touchmove', onMove)
+      window.removeEventListener('keydown', onKeyDown)
     }
   }, [isRunning, gameKey])
 
@@ -602,6 +713,17 @@ function GamePage() {
           </button>
         </div>
         <p className="subtitle">{status}</p>
+        {showGuide ? (
+          <div className="panel">
+            <h3>Session Guide (3 Sets)</h3>
+            <p className="muted-text">Read instructions once, then press Start Session.</p>
+            <ol className="session-guide-list">
+              <li>Set 1 (30 sec): Use your dominant hand.</li>
+              <li>Set 2 (30 sec): Use your non-dominant hand.</li>
+              <li>Set 3 (60 sec): Use keyboard keys only - press Q for left and P for right.</li>
+            </ol>
+          </div>
+        ) : null}
         <p className="hint-text">
           Tracking: {cameraEnabled ? (detectorReady ? (faceDetected ? `Face detected (${trackingMode})` : `No face lock (${trackingMode})`) : 'Loading model...') : 'Camera disabled'}
         </p>
@@ -618,6 +740,11 @@ function GamePage() {
           Paddle telemetry is saved once per second for graphs. Eye gaze is sampled ~20× per second, buffered to
           IndexedDB, and uploaded with the same session when the game ends.
         </p>
+        <p className="hint-text">
+          Naming + units: secondIndex (s), offsetMs (ms), paddleX (px), paddleDelta (px), paddleSpeedPerSecond
+          (px/s), eyeOffsetX (normalized left-right), eyeOffsetY (normalized up-down), eyeConfidence (0-1),
+          blinkDetected (0/1).
+        </p>
 
         <div className="stats-grid">
           <div className="panel">
@@ -629,8 +756,14 @@ function GamePage() {
             <p className="big-number">{topScore}</p>
           </div>
           <div className="panel">
-            <h3>Telemetry Seconds</h3>
-            <p className="big-number">{secondsPlayed}</p>
+            <h3>Session Seconds</h3>
+            <p className="big-number">
+              {secondsPlayed}s
+            </p>
+          </div>
+          <div className="panel">
+            <h3>Active Set</h3>
+            <p className="big-number">{activeSet.number}</p>
           </div>
           <div className="panel">
             <h3>Eye frames (IndexedDB)</h3>
@@ -665,7 +798,7 @@ function GamePage() {
 
         <div className="telemetry-grid">
           <div className="panel chart-panel">
-            <h3>Eye movement (per second)</h3>
+            <h3>Eye movement (eyeball left-right/up-down, per second [s])</h3>
             <div className="chart-wrap">
               <ResponsiveContainer width="100%" height={260}>
                 <LineChart data={eyeSeries}>
@@ -674,14 +807,14 @@ function GamePage() {
                   <YAxis domain={[-1.2, 1.2]} />
                   <Tooltip />
                   <Legend />
-                  <Line type="monotone" dataKey="gazeX" stroke="#2563eb" dot={false} connectNulls />
-                  <Line type="monotone" dataKey="gazeY" stroke="#c026d3" dot={false} connectNulls />
+                  <Line type="monotone" dataKey="gazeX" stroke="#2563eb" dot={false} connectNulls name="eyeOffsetX (eyeball left-right, normalized)" />
+                  <Line type="monotone" dataKey="gazeY" stroke="#c026d3" dot={false} connectNulls name="eyeOffsetY (eyeball up-down, normalized)" />
                 </LineChart>
               </ResponsiveContainer>
             </div>
           </div>
           <div className="panel chart-panel">
-            <h3>Paddle movement and speed (per second)</h3>
+            <h3>Paddle movement (slider left-right) and speed (per second [s])</h3>
             <div className="chart-wrap">
               <ResponsiveContainer width="100%" height={260}>
                 <LineChart data={paddleSeries}>
@@ -690,9 +823,9 @@ function GamePage() {
                   <YAxis />
                   <Tooltip />
                   <Legend />
-                  <Line type="monotone" dataKey="paddleX" stroke="#0f766e" dot={false} />
-                  <Line type="monotone" dataKey="paddleDelta" stroke="#f97316" dot={false} />
-                  <Line type="monotone" dataKey="paddleSpeedPerSecond" stroke="#7c3aed" dot={false} />
+                  <Line type="monotone" dataKey="paddleX" stroke="#0f766e" dot={false} name="paddleX (slider position, px)" />
+                  <Line type="monotone" dataKey="paddleDelta" stroke="#f97316" dot={false} name="paddleDelta (left-right change, px)" />
+                  <Line type="monotone" dataKey="paddleSpeedPerSecond" stroke="#7c3aed" dot={false} name="paddleSpeedPerSecond (slider speed, px/s)" />
                 </LineChart>
               </ResponsiveContainer>
             </div>
@@ -701,10 +834,31 @@ function GamePage() {
 
         <div className="game-actions">
           <button type="button" className="primary-btn" onClick={startGame}>
-            {isRunning ? 'Restart Game' : 'Start Game'}
+            {isRunning ? 'Restart Session' : 'Start Session'}
+          </button>
+          <button type="button" className="ghost-btn" onClick={() => setShowGuide((value) => !value)}>
+            {showGuide ? 'Hide Guide' : 'Show Guide'}
           </button>
         </div>
       </div>
+      {transitionModal ? (
+        <div className="set-popup-backdrop">
+          <div className="set-popup-card">
+            <h3>Set {SETS[transitionModal.nextSetIndex].number} Ready</h3>
+            <p className="muted-text">{transitionModal.reason}</p>
+            <p className="muted-text">{SETS[transitionModal.nextSetIndex].instruction}</p>
+            {transitionModal.phase === 'instruction' ? (
+              <button type="button" className="primary-btn" onClick={handleReadyForNextSet}>
+                I'm Ready
+              </button>
+            ) : (
+              <p className="set-countdown-text">
+                Starting in {transitionModal.countdown}s...
+              </p>
+            )}
+          </div>
+        </div>
+      ) : null}
     </main>
   )
 }

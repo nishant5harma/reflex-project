@@ -17,6 +17,9 @@ function AdminDashboardPage() {
   const [detailSessionId, setDetailSessionId] = useState(null)
   const [deletingSessionId, setDeletingSessionId] = useState(null)
   const [exportingSessionId, setExportingSessionId] = useState(null)
+  const [selectedSessionIds, setSelectedSessionIds] = useState([])
+  const [selectedScoreIds, setSelectedScoreIds] = useState([])
+  const [deletingScoreId, setDeletingScoreId] = useState(null)
 
   useEffect(() => {
     const fetchAdminData = async () => {
@@ -39,6 +42,8 @@ function AdminDashboardPage() {
       if (!selectedUserId) {
         setSelectedUserScores([])
         setSelectedUserSessions([])
+        setSelectedSessionIds([])
+        setSelectedScoreIds([])
         return
       }
 
@@ -49,6 +54,8 @@ function AdminDashboardPage() {
         ])
         setSelectedUserScores(scoresRes.data)
         setSelectedUserSessions(sessionsRes.data)
+        setSelectedSessionIds([])
+        setSelectedScoreIds([])
         setError('')
       } catch (err) {
         setError(err.response?.data?.message || 'Failed to load selected user data')
@@ -117,6 +124,7 @@ function AdminDashboardPage() {
       setDeletingSessionId(sessionId)
       await api.delete(`/admin/game-sessions/${sessionId}`)
       setSelectedUserSessions((prev) => prev.filter((entry) => entry.id !== sessionId))
+      setSelectedSessionIds((prev) => prev.filter((id) => id !== sessionId))
       if (detailSessionId === sessionId) {
         setDetailSessionId(null)
       }
@@ -128,9 +136,135 @@ function AdminDashboardPage() {
     }
   }
 
+  const handleSelectSession = (sessionId, checked) => {
+    setSelectedSessionIds((prev) => {
+      if (checked) {
+        return prev.includes(sessionId) ? prev : [...prev, sessionId]
+      }
+      return prev.filter((id) => id !== sessionId)
+    })
+  }
+
+  const handleSelectAllSessions = (checked) => {
+    if (!checked) {
+      setSelectedSessionIds([])
+      return
+    }
+    setSelectedSessionIds(selectedUserSessions.map((entry) => entry.id))
+  }
+
+  const handleDeleteSelectedSessions = async () => {
+    if (selectedSessionIds.length === 0) return
+    const yes = window.confirm(
+      `Delete ${selectedSessionIds.length} selected sessions? This is permanent.`
+    )
+    if (!yes) return
+
+    try {
+      setDeletingSessionId('bulk')
+      await Promise.all(selectedSessionIds.map((sessionId) => api.delete(`/admin/game-sessions/${sessionId}`)))
+      const deletedSet = new Set(selectedSessionIds)
+      setSelectedUserSessions((prev) => prev.filter((entry) => !deletedSet.has(entry.id)))
+      setSelectedSessionIds([])
+      if (detailSessionId != null && deletedSet.has(detailSessionId)) {
+        setDetailSessionId(null)
+      }
+      setError('')
+    } catch (err) {
+      setError(err.response?.data?.message || 'Failed to delete selected sessions')
+    } finally {
+      setDeletingSessionId(null)
+    }
+  }
+
+  const handleDeleteScoreAndRelatedSessions = async (scoreId) => {
+    if (!selectedUserId) return
+    const yes = window.confirm(
+      'Delete this score and all sessions for this user with the same final score?'
+    )
+    if (!yes) return
+
+    try {
+      setDeletingScoreId(scoreId)
+      const { data } = await api.delete(`/admin/users/${selectedUserId}/scores/${scoreId}`)
+      setSelectedUserScores((prev) => prev.filter((entry) => entry.id !== scoreId))
+      setSelectedScoreIds((prev) => prev.filter((id) => id !== scoreId))
+      if (Array.isArray(data.relatedSessionIds) && data.relatedSessionIds.length > 0) {
+        const relatedSet = new Set(data.relatedSessionIds)
+        setSelectedUserSessions((prev) =>
+          prev.filter((entry) => !relatedSet.has(entry.id))
+        )
+        setSelectedSessionIds((prev) => prev.filter((id) => !relatedSet.has(id)))
+        if (detailSessionId != null && relatedSet.has(detailSessionId)) {
+          setDetailSessionId(null)
+        }
+      }
+      setError('')
+    } catch (err) {
+      setError(err.response?.data?.message || 'Failed to delete score')
+    } finally {
+      setDeletingScoreId(null)
+    }
+  }
+
+  const handleSelectScore = (scoreId, checked) => {
+    setSelectedScoreIds((prev) => {
+      if (checked) {
+        return prev.includes(scoreId) ? prev : [...prev, scoreId]
+      }
+      return prev.filter((id) => id !== scoreId)
+    })
+  }
+
+  const handleSelectAllScores = (checked) => {
+    if (!checked) {
+      setSelectedScoreIds([])
+      return
+    }
+    setSelectedScoreIds(selectedUserScores.map((entry) => entry.id))
+  }
+
+  const handleDeleteSelectedScores = async () => {
+    if (!selectedUserId || selectedScoreIds.length === 0) return
+    const yes = window.confirm(
+      `Delete ${selectedScoreIds.length} selected score(s) and their related sessions?`
+    )
+    if (!yes) return
+
+    try {
+      setDeletingScoreId('bulk')
+      const responses = await Promise.all(
+        selectedScoreIds.map((scoreId) => api.delete(`/admin/users/${selectedUserId}/scores/${scoreId}`))
+      )
+
+      const deletedScoreSet = new Set(selectedScoreIds)
+      const relatedSessionIds = responses.flatMap((response) =>
+        Array.isArray(response?.data?.relatedSessionIds) ? response.data.relatedSessionIds : []
+      )
+      const relatedSessionSet = new Set(relatedSessionIds)
+
+      setSelectedUserScores((prev) => prev.filter((entry) => !deletedScoreSet.has(entry.id)))
+      setSelectedScoreIds([])
+
+      if (relatedSessionSet.size > 0) {
+        setSelectedUserSessions((prev) => prev.filter((entry) => !relatedSessionSet.has(entry.id)))
+        setSelectedSessionIds((prev) => prev.filter((id) => !relatedSessionSet.has(id)))
+        if (detailSessionId != null && relatedSessionSet.has(detailSessionId)) {
+          setDetailSessionId(null)
+        }
+      }
+
+      setError('')
+    } catch (err) {
+      setError(err.response?.data?.message || 'Failed to delete selected scores')
+    } finally {
+      setDeletingScoreId(null)
+    }
+  }
+
   return (
-    <main className="page">
-      <div className="card wide">
+    <main className="page page--full">
+      <div className="card wide card--fluid">
         <div className="top-bar">
           <h1 className="card-title">Admin Dashboard</h1>
           <button onClick={handleLogout} type="button" className="ghost-btn">
@@ -199,30 +333,70 @@ function AdminDashboardPage() {
               ))}
             </select>
           </div>
+          <div className="game-actions">
+            <button
+              type="button"
+              className="table-danger-btn"
+              onClick={handleDeleteSelectedScores}
+              disabled={selectedScoreIds.length === 0 || deletingScoreId === 'bulk'}
+            >
+              {deletingScoreId === 'bulk'
+                ? 'Deleting selected scores...'
+                : `Delete Selected Scores (${selectedScoreIds.length})`}
+            </button>
+          </div>
           <div className="table-wrap">
             <table>
               <thead>
                 <tr>
+                  <th>
+                    <input
+                      type="checkbox"
+                      checked={
+                        selectedUserScores.length > 0 &&
+                        selectedScoreIds.length === selectedUserScores.length
+                      }
+                      onChange={(event) => handleSelectAllScores(event.target.checked)}
+                    />
+                  </th>
                   <th>#</th>
                   <th>Score</th>
                   <th>Played At</th>
+                  <th>Delete</th>
                 </tr>
               </thead>
               <tbody>
                 {selectedUserId === '' ? (
                   <tr>
-                    <td colSpan={3}>Select a user to view scores.</td>
+                    <td colSpan={5}>Select a user to view scores.</td>
                   </tr>
                 ) : selectedUserScores.length === 0 ? (
                   <tr>
-                    <td colSpan={3}>No scores found for this user.</td>
+                    <td colSpan={5}>No scores found for this user.</td>
                   </tr>
                 ) : (
                   selectedUserScores.map((entry, index) => (
                     <tr key={entry.id}>
+                      <td>
+                        <input
+                          type="checkbox"
+                          checked={selectedScoreIds.includes(entry.id)}
+                          onChange={(event) => handleSelectScore(entry.id, event.target.checked)}
+                        />
+                      </td>
                       <td>{index + 1}</td>
                       <td>{entry.score}</td>
                       <td>{new Date(entry.createdAt).toLocaleString()}</td>
+                      <td>
+                        <button
+                          type="button"
+                          className="table-danger-btn"
+                          onClick={() => handleDeleteScoreAndRelatedSessions(entry.id)}
+                          disabled={deletingScoreId === entry.id || deletingScoreId === 'bulk'}
+                        >
+                          {deletingScoreId === entry.id ? 'Deleting...' : 'Delete score + related sessions'}
+                        </button>
+                      </td>
                     </tr>
                   ))
                 )}
@@ -234,10 +408,32 @@ function AdminDashboardPage() {
         <div className="panel">
           <h3>Telemetry sessions (selected user)</h3>
           <p className="muted-text">Open graphs for paddle motion, gaze, and blink counts tied to Brick Ball gameplay.</p>
+          <div className="game-actions">
+            <button
+              type="button"
+              className="table-danger-btn"
+              onClick={handleDeleteSelectedSessions}
+              disabled={selectedSessionIds.length === 0 || deletingSessionId === 'bulk'}
+            >
+              {deletingSessionId === 'bulk'
+                ? 'Deleting selected sessions...'
+                : `Delete Selected Sessions (${selectedSessionIds.length})`}
+            </button>
+          </div>
           <div className="table-wrap">
             <table>
               <thead>
                 <tr>
+                  <th>
+                    <input
+                      type="checkbox"
+                      checked={
+                        selectedUserSessions.length > 0 &&
+                        selectedSessionIds.length === selectedUserSessions.length
+                      }
+                      onChange={(event) => handleSelectAllSessions(event.target.checked)}
+                    />
+                  </th>
                   <th>#</th>
                   <th>Session</th>
                   <th>Score</th>
@@ -253,15 +449,22 @@ function AdminDashboardPage() {
               <tbody>
                 {selectedUserId === '' ? (
                   <tr>
-                    <td colSpan={11}>Select a user to view telemetry sessions.</td>
+                    <td colSpan={12}>Select a user to view telemetry sessions.</td>
                   </tr>
                 ) : selectedUserSessions.length === 0 ? (
                   <tr>
-                    <td colSpan={11}>No completed telemetry sessions for this user.</td>
+                    <td colSpan={12}>No completed telemetry sessions for this user.</td>
                   </tr>
                 ) : (
                   selectedUserSessions.map((entry, index) => (
                     <tr key={entry.id}>
+                      <td>
+                        <input
+                          type="checkbox"
+                          checked={selectedSessionIds.includes(entry.id)}
+                          onChange={(event) => handleSelectSession(entry.id, event.target.checked)}
+                        />
+                      </td>
                       <td>{index + 1}</td>
                       <td>{entry.id}</td>
                       <td>{entry.finalScore}</td>
